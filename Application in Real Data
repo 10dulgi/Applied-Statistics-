@@ -1,0 +1,139 @@
+library(survey)
+library(aftgee)
+library(doParallel)
+library(foreach)
+
+mimic <- read.csv('/Users/leejy7752/Downloads/mimic3_final.csv')
+
+I <- 500
+B <- 5
+
+pop_totals <- c(`(Intercept)` = nrow(mimic),
+                Glucose = sum(mimic$Glucose, na.rm = TRUE),
+                Heart.Rate = sum(mimic$Heart.Rate, na.rm = TRUE))
+
+beta_1_cs <- numeric(I); beta_2_cs <- numeric(I); beta_3_cs <- numeric(I); beta_4_cs <- numeric(I);
+beta_5_cs <- numeric(I); beta_6_cs <- numeric(I); beta_7_cs <- numeric(I); beta_8_cs <- numeric(I);
+beta_9_cs <- numeric(I)
+se_1_cs <- numeric(I); se_2_cs <- numeric(I); se_3_cs <- numeric(I); se_4_cs <- numeric(I);
+se_5_cs <- numeric(I); se_6_cs <- numeric(I); se_7_cs <- numeric(I); se_8_cs <- numeric(I);
+se_9_cs <- numeric(I)
+for (i in 1:I) {
+  
+  df <- mimic
+  subcohort_size <- 1000
+  
+  id <- sample(1:nrow(df), size = subcohort_size, replace = FALSE)
+  df_subcohort <- df[id, ]
+  df_failure <- df[df$delta == 1, ]
+  df_case_cohort <- unique(rbind(df_failure, df_subcohort))
+  
+  prob <- subcohort_size / nrow(df[df$delta == 0, ])
+  df_case_cohort$initial_weight <- ifelse(df_case_cohort$delta == 1, 1, 1 / prob)
+  
+  design <- svydesign(id = ~1, weights = ~initial_weight, data = df_case_cohort)
+  calibrated_design <- calibrate(design, 
+                                 formula = ~Glucose + Heart.Rate, 
+                                 population = pop_totals,
+                                 bounds = c(0, Inf), 
+                                 method = "linear")
+  
+  df_case_cohort$weight_calibrated <- weights(calibrated_design)
+  
+  main_model <- aftsrr(Surv(futime, delta) ~ Glucose + Heart.Rate + Height + Oxygen.saturation +
+                         Respiratory.rate + Temperature + Weight + Glascow.coma.scale.eye.opening +
+                         Glascow.coma.scale.verbal.response,
+                       data = df_case_cohort,
+                       weights = df_case_cohort$weight_calibrated)
+  
+  main_coef <- coef(main_model) 
+  
+  cl <- makeCluster(parallel::detectCores() - 1)
+  registerDoParallel(cl)
+  
+  boot_coefs <- foreach(b = 1:B, .combine = rbind, .packages = c("aftgee","survey")) %dopar% {
+
+    boot_idx <- sample(seq_len(nrow(df_case_cohort)), size = nrow(df_case_cohort), replace = TRUE)
+    boot_data <- df_case_cohort[boot_idx, ]
+    
+    boot_model <- aftsrr(Surv(futime, delta) ~ Glucose + Heart.Rate + Height + Oxygen.saturation +
+                           Respiratory.rate + Temperature + Weight + Glascow.coma.scale.eye.opening +
+                           Glascow.coma.scale.verbal.response,
+                         data = boot_data,
+                         weights = boot_data$weight_calibrated)
+    
+    coef(boot_model)
+  }
+  
+  stopCluster(cl)
+  
+  boot_se <- apply(boot_coefs, 2, sd)
+  
+  beta_1_cs[i] <- main_coef[1]
+  beta_2_cs[i] <- main_coef[2]
+  beta_3_cs[i] <- main_coef[3]
+  beta_4_cs[i] <- main_coef[4]
+  beta_5_cs[i] <- main_coef[5]
+  beta_6_cs[i] <- main_coef[6]
+  beta_7_cs[i] <- main_coef[7]
+  beta_8_cs[i] <- main_coef[8]
+  beta_9_cs[i] <- main_coef[9]
+  
+  se_1_cs[i] <- boot_se[1]
+  se_2_cs[i] <- boot_se[2]
+  se_3_cs[i] <- boot_se[3]
+  se_4_cs[i] <- boot_se[4]
+  se_5_cs[i] <- boot_se[5]
+  se_6_cs[i] <- boot_se[6]
+  se_7_cs[i] <- boot_se[7]
+  se_8_cs[i] <- boot_se[8]
+  se_9_cs[i] <- boot_se[9]
+  
+  cat("iteration", i, "\n")
+}
+
+cat("Beta1:", mean(beta_1_cs, na.rm = TRUE), "SE_1:", mean(se_1_cs, na.rm = TRUE), "\n")
+cat("Beta2:", mean(beta_2_cs, na.rm = TRUE), "SE_2:", mean(se_2_cs, na.rm = TRUE), "\n")
+cat("Beta3:", mean(beta_3_cs, na.rm = TRUE), "SE_3:", mean(se_3_cs, na.rm = TRUE), "\n")
+cat("Beta4:", mean(beta_4_cs, na.rm = TRUE), "SE_4:", mean(se_4_cs, na.rm = TRUE), "\n")
+cat("Beta5:", mean(beta_5_cs, na.rm = TRUE), "SE_5:", mean(se_5_cs, na.rm = TRUE), "\n")
+cat("Beta6:", mean(beta_6_cs, na.rm = TRUE), "SE_6:", mean(se_6_cs, na.rm = TRUE), "\n")
+cat("Beta7:", mean(beta_7_cs, na.rm = TRUE), "SE_7:", mean(se_7_cs, na.rm = TRUE), "\n")
+cat("Beta8:", mean(beta_8_cs, na.rm = TRUE), "SE_8:", mean(se_8_cs, na.rm = TRUE), "\n")
+cat("Beta9:", mean(beta_9_cs, na.rm = TRUE), "SE_9:", mean(se_9_cs, na.rm = TRUE), "\n")
+
+
+## subcohort = 100, 
+### Beta1: 0.01323322 SE_1: 0.01579365 
+### Beta2: -0.001158572 SE_2: 0.006966811 
+### Beta3: -0.003278775 SE_3: 0.01290554
+### Beta4: -0.003230782 SE_4: 0.05685234 
+### Beta5: 0.05140427 SE_5: 0.03053195 
+### Beta6: 0.1569061 SE_6: 0.2718762 
+### Beta7: 0.00487559 SE_7: 0.006253088
+### Beta8: 0.02037597 SE_8: 0.1774682
+### Beta9: -0.1112426 SE_9: 0.1391936
+
+
+## subcohort = 500 
+### Beta1: 0.006812668 SE_1: 0.006701157
+### Beta2: -0.0002991342 SE_2: 0.002597332 
+### Beta3: -9.08835e-06 SE_3: 0.005595278 
+### Beta4: -0.02257358 SE_4: 0.03043226
+### Beta5: 0.05277661 SE_5: 0.01818346
+### Beta6: 0.1874266 SE_6: 0.1248694 
+### Beta7: 0.0003094449 SE_7: 0.003090413
+### Beta8: 0.1583507 SE_8: 0.07997769
+### Beta9: -0.2136494 SE_9: 0.08174554 
+
+  
+## subcohort = 1000 
+### Glucose: 0.002721376 SE_1: 0.003113783 
+### Heart Rate: -0.0002248837 SE_2: 0.001221863
+### Height: -9.599642e-05 SE_3: 0.002483005
+### Oxygen saturation: -0.009113855 SE_4: 0.0165257
+### Respiratory rate: 0.03064156 SE_5: 0.008630363
+### Temperature: 0.116917 SE_6: 0.05437504
+### Weight: 0.0005679108 SE_7: 0.001446905
+### Glascow coma scale eye opening: 0.08422265 SE_8: 0.03612024 
+### Glascow.coma.scale.verbal.response: -0.09288166 SE_9: 0.03270876
