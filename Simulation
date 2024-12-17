@@ -1,3 +1,9 @@
+library(survey)
+library(aftgee)
+library(survival)
+library(MASS)
+library(evd)
+
 # AFTsrr 적용 (calibration의 적용변수 : Z1, W1, W2)
 
 beta_1_cs <- numeric()
