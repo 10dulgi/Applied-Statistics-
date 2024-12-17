@@ -1,0 +1,96 @@
+# AFTsrr 적용 (calibration의 적용변수 : Z1, W1, W2)
+
+beta_1_cs <- numeric()
+beta_2_cs <- numeric()
+beta_3_cs <- numeric()
+se_1_cs <- numeric()
+se_2_cs <- numeric()
+se_3_cs <- numeric()
+
+
+for (i in 1:500) {
+  
+  df <- gene()
+  subcohort_size <- 100
+  
+  
+  id <- sample(1:nrow(df), size = subcohort_size, replace = FALSE)
+  df_subcohort <- df[id, ]
+  df_failure <- df[df$status == 1, ]
+  df_case_cohort <- unique(rbind(df_failure, df_subcohort))
+  
+  
+  prob <- subcohort_size / nrow(df[df$status == 0, ])
+  df_case_cohort$initial_weight <- ifelse(df_case_cohort$status == 1, 1, 1 / prob)
+  
+  
+  pop_totals <- c(`(Intercept)` = nrow(df),
+                  Z1 = sum(df$Z1, na.rm = TRUE),
+                  W1 = sum(df$W1, na.rm = TRUE),
+                  W2 = sum(df$W2, na.rm = TRUE))
+  
+  
+  design <- svydesign(id = ~1, weights = ~initial_weight, data = df_case_cohort)
+  calibrated_design <- calibrate(design, 
+                                 formula = ~Z1 + W1 + W2, 
+                                 population = pop_totals,
+                                 bounds = c(0, Inf), 
+                                 method = "linear")
+  
+  
+  df_case_cohort$weight_calibrated <- weights(calibrated_design)
+  
+  
+  main_model <- aftsrr(Surv(x, status) ~ Z1 + W1 + W2, data = df_case_cohort,
+                       weights = df_case_cohort$weight_calibrated)
+  
+  main_coef <- coef(main_model) 
+  
+  B <- 10 
+  boot_coefs <- matrix(NA, nrow = B, ncol = length(main_coef))
+  
+  set.seed(i) 
+  
+  for (b in 1:B) {
+    boot_idx <- sample(seq_len(nrow(df_case_cohort)), size = nrow(df_case_cohort), replace = TRUE)
+    boot_data <- df_case_cohort[boot_idx, ]
+    
+    boot_model <- aftsrr(Surv(x, status) ~ Z1 + W1 + W2, data = boot_data,
+                         weights = boot_data$weight_calibrated)
+    boot_coefs[b, ] <- coef(boot_model)
+  }
+  
+  boot_se <- apply(boot_coefs, 2, sd)
+  
+  
+  beta_1_cs[i] <- main_coef[1]
+  beta_2_cs[i] <- main_coef[2]
+  beta_3_cs[i] <- main_coef[3]
+  
+  se_1_cs[i] <- boot_se[1]
+  se_2_cs[i] <- boot_se[2]
+  se_3_cs[i] <- boot_se[3]
+  
+  cat("iteration", i, "\n")
+}
+
+cat("Beta1:", mean(beta_1_cs, na.rm = TRUE), "SE_1:", mean(se_1_cs, na.rm = TRUE), "\n")
+cat("Beta2:", mean(beta_2_cs, na.rm = TRUE), "SE_2:", mean(se_2_cs, na.rm = TRUE), "\n")
+cat("Beta3:", mean(beta_3_cs, na.rm = TRUE), "SE_3:", mean(se_3_cs, na.rm = TRUE), "\n")
+
+## subcohort size = 100 
+### Beta1: 0.6998603 SE_1: 0.08412376 
+### Beta2: 0.7061977 SE_2: 0.08604753
+### Beta3: -0.9406286 SE_3: 0.179691
+
+
+## subcohort size = 500,
+### Beta1: 0.7022736 SE_1: 0.05777077 
+### Beta2: 0.7017067 SE_2: 0.05844316 
+### Beta3: -1.006129 SE_3: 0.1299355
+
+
+## subcohort size = 1000,
+### Beta1: 0.6976632 SE_1: 0.04591975 
+### Beta2: 0.702446 SE_2: 0.04597104
+### Beta3: -1.003003 SE_3: 0.104965
